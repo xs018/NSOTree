@@ -1,21 +1,43 @@
-from dsplot.tree import BinaryTree
+def spiral_matrix(matrix):
+  """Generates a spiral matrix from the given matrix.
 
-# tree = BinaryTree(nodes=['-0.5028*X1 + -0.1886*X0', 1, None])
-# tree.plot(shape='box')
+  Args:
+    matrix: A 2D list representing the matrix.
 
-import torch
-from models.network import NeuralTree
+  Returns:
+    A 2D list representing the spiral matrix.
+  """
 
-torch.manual_seed(1)
+  result = []
+  top, bottom = 0, len(matrix) - 1
+  left, right = 0, len(matrix[0]) - 1
+  while top <= bottom and left <= right:
+    # Add the top row.
+    for i in range(left, right + 1):
+      result.append(matrix[top][i])
+    top += 1
 
-depth = 3
-input_dim = 5
-batch_size = 6
-model = NeuralTree(input_dim, 1, 1, depth, 0, True, 'none', approx='approx').cuda()
-x = torch.randn(batch_size, input_dim).cuda()
-t = torch.randn(batch_size, ).cuda()
-e = torch.randint(0, 2, (batch_size, )).cuda()
+    # Add the right column.
+    for i in range(top, bottom + 1):
+      result.append(matrix[i][right])
+    right -= 1
 
-# model.build_tree(x, t, e, topk=3, save_path="tree.png")
-# print(model(x, t, e))
-model(x)
+    # Add the bottom row in reverse order.
+    for i in range(right, left - 1, -1):
+      result.append(matrix[bottom][i])
+    bottom -= 1
+
+    # Add the left column in reverse order.
+    for i in range(bottom, top - 1, -1):
+      result.append(matrix[i][left])
+    left += 1
+
+  return result
+
+
+# Example usage:
+matrix = [[1, 2, 3],
+          [4, 5, 6],
+          [7, 8, 9]]
+
+print(spiral_matrix(matrix))

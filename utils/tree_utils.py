@@ -11,7 +11,7 @@ class Node:
         self.log_p_value = None
 
 
-def _build_binary_tree(values, t, e):
+def _build_binary_tree(values, t, e, thres=0.05):
     if not values:
         return None
 
@@ -19,6 +19,7 @@ def _build_binary_tree(values, t, e):
     root = Node(values[0])
     queue = [root]
     i = 1
+    drop_node = []
 
     num_nodes = 2 ** len(values) - 1
 
@@ -45,6 +46,9 @@ def _build_binary_tree(values, t, e):
         t_right, e_right = t[current.right.value], e[current.right.value]
         results = logrank_test(t_left, t_right, event_observed_A=e_left, event_observed_B=e_right)
 
+        if results.p_value > thres:
+            drop_node.append(i)
+
         current.log_p_value = results.p_value
 
     return root
@@ -70,8 +74,8 @@ def _level_order_traversal(root):
 
     return result
 
-def compute_logrank_test(masks, t, e):
-    tree = _build_binary_tree(masks, t, e)
+def compute_logrank_test(masks, t, e, thres=0.05):
+    tree = _build_binary_tree(masks, t, e, thres)
     return _level_order_traversal(tree)
 
 
@@ -85,5 +89,5 @@ if __name__ == "__main__":
     e = np.random.randint(0, 2, (num_samples, ))
 
     d = 5
-    tree = _build_binary_tree([np.random.randint(0, 2, (num_samples, )) for _ in range(d)], t, e)
+    tree = _build_binary_tree([np.random.randint(0, 2, (num_samples, )) for _ in range(d)], t, e, )
     print(_level_order_traversal(tree))

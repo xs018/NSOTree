@@ -15,7 +15,7 @@ from pycox.evaluation import EvalSurv
 
 from models.cox_nstree import CoxNOSTree
 
-from datasets.dataloading import load_dataset, format_dataset_to_df
+from utils.dataloading import load_dataset, format_dataset_to_df
 
 
 class Concordance(tt.cb.MonitorMetrics):
@@ -76,9 +76,11 @@ class GatherMetrics(tt.cb.MonitorMetrics):
                 print(f"c-index:{concordance:.4f}, jacobians rank:[{jacobians_rank}/{jacobians.shape[1]}] offsets_rank:[{offsets_rank}/{offsets.shape[1]}] leaf_input_rank:[{leaf_input_rank}/{leaf_input.shape[1]}]")
 
     def on_fit_end(self):
-        print(self.scores['jacobians_rank']['score'][-1])
+        print(np.max(self.scores['c_index']['score']))
+        # print(self.model.net.soft_thres.lam)
         save_path = f"tree_plots/depth{self.model.net.num_layer}.jpg"
-        self.model.net.build_tree(self.x, self.durations, self.events, topk=2, save_path=save_path)
+        # self.model.net.build_tree(self.x, self.durations, self.events, topk=2, save_path=save_path)
+        # self.model.net.prune_tree(save_path=f"tree_plots/depth{self.model.net.num_layer}_pruned.jpg")
 
 
 if __name__ == "__main__":
@@ -91,18 +93,20 @@ if __name__ == "__main__":
 
     vis = False
     hidden_dim = 1
-    depth = 3
+    depth = 5
     back_n =  0
     drop_type = 'node_dropconnect'
     p_dropout = 0.1
     net_type = 'locally_constant'
     anneal = 'approx'
     batch_size = 128
-    epochs = 40
-    lr = 2e-1
+    epochs = 100
+    lr = 1e-3
     momentum = 0.95
 
     train_data, valid_data, test_data, viz_data, viz_data_unnorm = data['train'], data['valid'], data['test'], data['viz'], data['viz_unnorm']
+    
+    # train_data, valid_data = data['train'], data['val']
     train_data_df = format_dataset_to_df(train_data, 'T', 'E')
     X_train, y_train = get_x_y(train_data_df, attr_labels=['E', 'T'], pos_label=1)
     val_data_df = format_dataset_to_df(valid_data, 'T', 'E')
@@ -127,8 +131,8 @@ if __name__ == "__main__":
     input_dim = X_train.shape[1]
     output_dim = 1
     
-    optimizer = tt.optim.SGD(lr=lr, momentum=momentum, weight_decay=1e-4, nesterov=True)
-    # optimizer = tt.optim.AdamW(lr=lr, decoupled_weight_decay=1e-4,)
+    optimizer = tt.optim.SGD(lr=lr, momentum=momentum, weight_decay=0, nesterov=False)
+    # optimizer = tt.optim.AdamW(lr=lr, decoupled_weight_decay=0)
 
     model = CoxNOSTree(input_dim=input_dim, 
                                 output_dim=output_dim, 
@@ -140,10 +144,11 @@ if __name__ == "__main__":
                                 net_type=net_type, 
                                 approx=anneal,
                                 p_drop = p_dropout,
-                                optimizer=optimizer)
+                                optimizer=optimizer,
+                                lr=lr)
     
     callbacks = [
-                tt.callbacks.EarlyStopping(), 
+                # tt.callbacks.EarlyStopping(), 
                 #  tt.callbacks.ClipGradNorm(model.net, 12.0), 
                 GatherMetrics(X_test, durations_test, events_test), 
                 ]
@@ -158,27 +163,27 @@ if __name__ == "__main__":
     # c_index = ev.concordance_td()
     # print(f"C-Index = {c_index:.4f}")
 
-    num_bootstrap = 100
-    _ = model.compute_baseline_hazards()
-    surv = model.predict_surv_df(X_test)
-    ev = EvalSurv(surv, durations_test, events_test, censor_surv='km')
-    c_index = ev.concordance_td()
+    # num_bootstrap = 100
+    # _ = model.compute_baseline_hazards()
+    # surv = model.predict_surv_df(X_test)
+    # ev = EvalSurv(surv, durations_test, events_test, censor_surv='km')
+    # c_index = ev.concordance_td()
     # print(f"C-Index = {c_index:.4f}")
 
-    C_indinces = []
-    indices = np.arange(len(X_test))
-    for _ in range(num_bootstrap):
-            bootstraped_indices = np.random.choice(indices, size=len(X_test), replace=True)
-            bootstrapped_X_test = X_test[bootstraped_indices]
-            bootstrapped_y_test_T = durations_test[bootstraped_indices]
-            bootstrapped_y_test_E = events_test[bootstraped_indices]
+    # C_indinces = []
+    # indices = np.arange(len(X_test))
+    # for _ in range(num_bootstrap):
+    #         bootstraped_indices = np.random.choice(indices, size=len(X_test), replace=True)
+    #         bootstrapped_X_test = X_test[bootstraped_indices]
+    #         bootstrapped_y_test_T = durations_test[bootstraped_indices]
+    #         bootstrapped_y_test_E = events_test[bootstraped_indices]
             
-            surv = model.predict_surv_df(bootstrapped_X_test)
-            ev = EvalSurv(surv, bootstrapped_y_test_T, bootstrapped_y_test_E, censor_surv='km')
-            C_indinces.append(ev.concordance_td())
+    #         surv = model.predict_surv_df(bootstrapped_X_test)
+    #         ev = EvalSurv(surv, bootstrapped_y_test_T, bootstrapped_y_test_E, censor_surv='km')
+    #         C_indinces.append(ev.concordance_td())
     
-    C_indinces = np.array(C_indinces)
-    c_index_lower = np.percentile(C_indinces, 2.5)
-    c_index_upper = np.percentile(C_indinces, 97.5)
+    # C_indinces = np.array(C_indinces)
+    # c_index_lower = np.percentile(C_indinces, 2.5)
+    # c_index_upper = np.percentile(C_indinces, 97.5)
 
-    print(f"C-Index (95% CI) = {c_index:.4f} ({c_index_lower:.3f}, {c_index_upper:.3f})")
+    # print(f"C-Index (95% CI) = {c_index:.4f} ({c_index_lower:.3f}, {c_index_upper:.3f})")

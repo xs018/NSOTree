@@ -1,8 +1,11 @@
 from pycox import models
+import torchtuples as tt
 from torchtuples.tupletree import tuplefy
-from torch.optim.lr_scheduler import StepLR
+import numpy as np
+# from torch.optim.lr_scheduler import CosineAnnealingLR
 import torchtuples.callbacks as cb
 from models.network import NeuralTree
+from timm.scheduler.cosine_lr import CosineLRScheduler
 
 def get_alpha(epoch, total_epoch):
     return float(epoch) / float(total_epoch)
@@ -22,6 +25,7 @@ class CoxNOSTree(models.cox._CoxPHBase):
                  approx = 'none',
                  alpha = 1,
                  optimizer=None, 
+                 lr=1e-4,
                  device=None, 
                  loss=None):
         
@@ -34,13 +38,13 @@ class CoxNOSTree(models.cox._CoxPHBase):
                 drop_type, 
                 net_type, 
                 approx)
-        
+        self.lr = lr
         self.p_drop = p_drop
         self.alpha = alpha
         self.anneal = approx
 
         if loss is None:
-            loss = models.loss.CoxPHLoss()
+            loss = models.loss.CoxCCLoss(0.1)
         super().__init__(net, loss, optimizer, device)
 
     def fit_dataloader(
@@ -57,11 +61,20 @@ class CoxNOSTree(models.cox._CoxPHBase):
         )
         self.callbacks.give_model(self)
 
-        self.lr_scheduler = StepLR(self.optimizer.optimizer, step_size=10, gamma=0.2)
+        # self.lr_scheduler = StepLR(self.optimizer.optimizer, step_size=10, gamma=0.2)
+        
+        num_steps = len(dataloader)
+        warmup_steps = 10 * num_steps
+        self.lr_scheduler = CosineLRScheduler(self.optimizer.optimizer, 
+                                              t_initial=epochs*num_steps, 
+                                              warmup_lr_init=self.lr,
+                                              warmup_t=warmup_steps,
+                                              cycle_limit=1,
+                                              t_in_epochs=False,
+                                              )
 
         stop = self.callbacks.on_fit_start()
         for epoch in range(epochs):
-            self.lr_scheduler.step()
             self.alpha = get_alpha(epoch, epochs)
 
             if stop:
@@ -69,7 +82,7 @@ class CoxNOSTree(models.cox._CoxPHBase):
             stop = self.callbacks.on_epoch_start()
             if stop:
                 break
-            for data in dataloader:
+            for idx, data in enumerate(dataloader):
                 stop = self.callbacks.on_batch_start()
                 if stop:
                     break
@@ -84,12 +97,15 @@ class CoxNOSTree(models.cox._CoxPHBase):
                 stop = self.callbacks.on_batch_end()
                 if stop:
                     break
+                self.lr_scheduler.step_update(epoch * num_steps + idx)
             else:
                 stop = self.callbacks.on_epoch_end()
+
         self.callbacks.on_fit_end()
         return self.log
 
-    def compute_metrics(self, data, metrics=None):
+    def compute_metrics(self, input, metrics=None):
+        input, target = self._sorted_input_target(input, target)
         """Function for computing the loss and other metrics.
 
         Arguments:
@@ -103,14 +119,43 @@ class CoxNOSTree(models.cox._CoxPHBase):
         if (self.loss is None) and (self.loss in metrics.values()):
             raise RuntimeError(f"Need to set `self.loss`.")
 
-        input, target = data
+        # input, target = data
+        # input = self._to_device(input)
+        # target = self._to_device(target)
+        
+        # if self.net.net_type == 'locally_constant':
+        #     out = self.net(input[0], None, None, self.p_drop, self.alpha)
+        # elif self.net.net_type == 'locally_linear':
+        #     out = self.net.normal_forward(*input)
+
+        # out = tuplefy(out)
+        # return {name: metric(*out, *target) for name, metric in metrics.items()}
         input = self._to_device(input)
-        target = self._to_device(target)
+        batch_size = input.lens().flatten().get_if_all_equal()
+        if batch_size is None:
+            raise RuntimeError("All elements in input does not have the same length.")
+        case, control = input # both are TupleTree
+        input_all = tt.TupleTree((case,) + control).cat()
+        print(input_all)
         
         if self.net.net_type == 'locally_constant':
-            out = self.net(input[0], None, None, self.p_drop, self.alpha)
+            g_all = self.net(input_all[0], None, None, self.p_drop, self.alpha)
         elif self.net.net_type == 'locally_linear':
-            out = self.net.normal_forward(*input)
+            g_all = self.net.normal_forward(*input)
 
-        out = tuplefy(out)
-        return {name: metric(*out, *target) for name, metric in metrics.items()}
+        g_all = tt.tuplefy(g_all).split(batch_size).flatten()
+        g_case = g_all[0]
+        g_control = g_all[1:]
+        res = {name: metric(g_case, g_control) for name, metric in metrics.items()}
+        return res
+    
+    @staticmethod
+    def _sorted_input_target(input, target):
+        input, target = tt.tuplefy(input, target).to_numpy()
+        durations, _ = target
+        idx_sort = np.argsort(durations)
+        if (idx_sort == np.arange(0, len(idx_sort))).all():
+            return input, target
+        input = tt.tuplefy(input).iloc[idx_sort]
+        target = tt.tuplefy(target).iloc[idx_sort]
+        return input, target

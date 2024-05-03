@@ -9,6 +9,11 @@ from binarytree import build
 from dsplot.tree import BinaryTree
 from utils.tree_utils import compute_logrank_test
 
+def print_p_value(p, thres):
+    if p > thres:
+        return f"p > {thres}"
+    else:
+        return f"p < {thres}"
 
 def decimal_to_binary(decimal_num):
     binary_str = format(int(decimal_num), 'b')
@@ -118,9 +123,17 @@ class GAB(nn.Module):
 class SoftThreshold(nn.Module):
     def __init__(self):
         super().__init__()
+        self.lam = nn.Parameter(torch.zeros(1, ))
 
     def forward(self, x):
-        pass
+        # lam = 
+        x = torch.sign(x) * self.prox_plus(torch.abs(x) - F.relu(self.lam))
+        return x
+
+    def prox_plus(self, x):
+        # Projection onto non-negative numbers
+        x[x < 0] = 0
+        return x
 
 
 class LowrankApprox(nn.Module):
@@ -171,6 +184,7 @@ class NeuralTree(nn.Module):
         self.n_neuron = self.hidden_dim * self.num_layer
         self.approx = approx
         self.num_nodes = 2 ** self.num_layer - 1
+        self.log_p_values = None
         
         self.layer = nn.ModuleList()
 
@@ -179,6 +193,8 @@ class NeuralTree(nn.Module):
         self.output_constants = dict()
         self.output_weights = dict()
         self.output_biases = dict()
+        
+        # self.soft_thres = SoftThreshold()
 
         accu_dim = input_dim
         for _ in range(self.num_layer):
@@ -240,7 +256,7 @@ class NeuralTree(nn.Module):
                 cur_embed = next_embed
         return self.output_fc(cur_embed), relu_masks
 
-    def forward(self, init_layer, t=None, e=None, p=0, alpha=None, return_deriv=False):
+    def forward(self, init_layer, t=None, e=None, p=0, alpha=None, return_deriv=False, thres=0.05):
         assert(self.net_type == 'locally_constant')
         if len(init_layer.shape) == 4:
             bz = init_layer.shape[0]
@@ -275,6 +291,7 @@ class NeuralTree(nn.Module):
 
             split_mask = (next_embed > 0).squeeze(1).detach().cpu().numpy().astype(bool) # splitting mask 
             relu_masks.append(split_mask)
+            # print(next_embed.shape)
                     
             # <----------------- compute neuron derivatives ----------------->
             if self.approx == 'approx':
@@ -287,11 +304,11 @@ class NeuralTree(nn.Module):
                 neur_deriv = (next_embed > 0).type(torch.cuda.FloatTensor)
                 next_embed = F.relu(next_embed)
 
-            # print(next_embed.shape, neur_deriv.shape)
             patterns.append(neur_deriv)
             
             # <----------------- compute jacobians and offsets ----------------->
             neur_deriv = neur_deriv.unsqueeze(-1)
+            # w = self.soft_thres(w)
             if i == 0:
                 jacobians = neur_deriv * w
                 offsets = next_embed - torch.bmm(jacobians, x).squeeze(-1)
@@ -315,14 +332,18 @@ class NeuralTree(nn.Module):
                 cur_embed = next_embed
 
         # print(jacobians.shape)
+        # jacobians = self.soft_thres(jacobians)
+        # print(jacobians.shape)
+
+        # print(jacobians.shape)
 
         if return_deriv:
             return jacobians, offsets
 
         if logrank_test:
             # <----------------- compute logrank test ----------------->
-            logrank_p_values = compute_logrank_test(relu_masks, t, e)
-            return logrank_p_values
+            logrank_p_values = compute_logrank_test(relu_masks, t, e, thres)
+            return np.array(logrank_p_values)
         else:
             # <----------------- map leaf to output ----------------->
             leaf_input = torch.cat([jacobians, offsets.unsqueeze(-1)], dim=2).view(batch_size, -1) 
@@ -334,24 +355,40 @@ class NeuralTree(nn.Module):
             
             return leaf_output
 
-    def build_tree(self, init_layer, t=None, e=None, p=0, alpha=None, topk=None, save_path=None):
+    def build_tree(self, init_layer, t=None, e=None, p=0, alpha=None, topk=None, thres=0.05, save_path=None):
         start = time.time()
         nodes = self._prepare_tree_nodes(topk)
-        log_p_values = self.forward(init_layer, t, e, p, alpha)
+        self.log_p_values = self.forward(init_layer, t, e, p, alpha, thres=thres)
         # reorganize tree
         nodes_reorganized = []
-        assert len(nodes) == len(log_p_values)
-        for n, p in zip(nodes, log_p_values):
-            nodes_reorganized.append(n + f"\n [P: {p:.3f}]")
+        assert len(nodes) == len(self.log_p_values)
+        for n, p in zip(nodes, self.log_p_values):
+            nodes_reorganized.append(n + f"\n [{print_p_value(p, thres)}]")
 
         if save_path:
             tree = BinaryTree(nodes=nodes_reorganized)
             tree.plot(output_path=save_path, shape='box')
         else:
             tree = build(nodes_reorganized)
+        self.nodes = nodes_reorganized
         end = time.time()
         print(f"built tree in {end-start:.2}s")
-        return nodes_reorganized
+        return tree, nodes_reorganized, np.array(self.log_p_values)
+
+    def prune_tree(self, thres=0.05, save_path=None):
+        if self.log_p_values is None:
+            raise Exception("build tree first")
+        prune_nodes  = np.where(self.log_p_values > thres)[0].tolist() + \
+                        np.where(np.isnan(self.log_p_values))[0].tolist()
+        prune_nodes = (np.array(sorted(prune_nodes))+1).tolist()
+        for n in prune_nodes[::-1]:
+            self.nodes[n-1] = None
+            if (n) // 2 in prune_nodes: prune_nodes.remove(n)
+
+        if save_path:
+            tree = BinaryTree(nodes=self.nodes)
+            tree.plot(output_path=save_path, shape='box')
+        return prune_nodes
 
     def _prepare_tree_nodes(self, topk=None):
         if topk is None:

@@ -1,27 +1,40 @@
 import torch
-from math import floor
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from models.network_tree import NeuralTree
 
+# # activation functions
+# def my_softplus(x, tau=1., threshold=20.):
+#     truncate_mask = (x > threshold).type(torch.cuda.FloatTensor)
+#     return truncate_mask * x + (1. - truncate_mask) * (tau * torch.log(1 + torch.exp((1. - truncate_mask) * x / tau)))
 
-def round_to_nearest(n, ratio=1.0, base_number=4, allow_rank_eq1=False):
-    rank = floor(floor(n * ratio) / base_number) * base_number
-    rank = min(max(rank, 1), n)
-    if rank == 1:
-        rank = rank if allow_rank_eq1 else n
-    return rank
+# def my_softplus_derivative(x, tau=1., threshold=20.):
+#     truncate_mask = (x > threshold).type(torch.cuda.FloatTensor)
+#     return truncate_mask + (1. - truncate_mask) / (1 + torch.exp(- (1. - truncate_mask) * x / tau) )
 
-# print(round_to_nearest(55))
-x = torch.randn(100, 20)
-U, S, V = torch.svd(x)
-print(U.shape, S.shape, V.shape)
+# input = torch.linspace(-5, 5, 100).cuda()
+# out = my_softplus(input).detach().cpu().numpy()
+# derv = my_softplus_derivative(input).detach().cpu().numpy()
+# print(out.shape, derv.shape)
 
+# fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+# axes[0].plot(out)
+# axes[1].plot(derv)
+# plt.show()
 
-# for ep in range(epochs):
-#     for data in dataloader:
-#         # 1. compute g for whole dataset
-#         g = 0
-#         for data in dataloader:
-#             # compute gradient for single batch
+# out = F.cosine_similarity(torch.randn(100, 4), torch.randn(3, 4))
+# print(out.shape)
 
-#         # 2. compute g_step
+torch.manual_seed(0)
 
-#         optimizer.step()
+depth = 4
+bsz = 128
+model = NeuralTree(5, 1, 1, depth, 0, True).cuda()
+x = torch.randn(bsz, 5).cuda()
+t = torch.randn(bsz, )
+e = torch.randint(0, 2, (bsz,) )
+model(x, t, e)
+model.traversal_tree()
+model.fix_tree()
+
+model(x, finetuing=True)
