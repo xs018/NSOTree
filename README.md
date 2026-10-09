@@ -8,6 +8,7 @@ training scripts, sample survival datasets, and generated tree visualizations.
 ## Repository layout
 
 ```text
+NSOTree2/           Previous implementation preserved from the original repo
 models/             Neural tree networks and PyCox wrappers
 utils/              Dataset loading and tree utilities
 datasets/           Simulated and real survival datasets
